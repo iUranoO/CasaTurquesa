@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/utils/Context.sol";
-
+import "@thirdweb-dev/contracts/interfaces/token/ITokenERC20.sol";
+import "@thirdweb-dev/contracts/openzeppelin-presets/security/ReentrancyGuard.sol";
+import "@thirdweb-dev/contracts/openzeppelin-presets/utils/Context.sol";
+import "@thirdweb-dev/contracts/openzeppelin-presets/utils/math/SafeMath.sol";
 
 contract PoolTurquesa is ReentrancyGuard {
-    
+    using SafeMath for uint256;
     struct Pool {
         string name;
         address creator;
@@ -27,6 +27,7 @@ contract PoolTurquesa is ReentrancyGuard {
 
     mapping(string => Pool) public pools;
     Property[] public properties;
+    mapping(string => Property[]) public poolProperties;
     
     address public owner;
     event PoolCreated(string name, uint goal, uint deadline);
@@ -34,14 +35,15 @@ contract PoolTurquesa is ReentrancyGuard {
     event Contribution(string poolName, address contributor, uint amount);
     event RefundClaimed(string poolName, address contributor, uint amount);
     
-
-    constructor() {
+    IERC20 public tokenPool;
+    constructor(address _tokenPoolAddress) {
         owner = msg.sender;
-    } 
+        tokenPool = IERC20(_tokenPoolAddress); // Asignación del token ERC20
+    }
     modifier onlyOwner() {
         require(msg.sender == owner, "Only the visionary owner can unleash this function");
         _;
-}
+    }
 
 
     function createPool(string memory _name, uint _goal, uint _deadline) public onlyOwner {
@@ -70,10 +72,13 @@ contract PoolTurquesa is ReentrancyGuard {
         emit PropertyListed(_name, _price, _image);
     }
 
-    function contribute(string memory _name, uint256 _amount) public payable nonReentrant {
+    function contributeWithToken(string memory _name, uint256 _amount) public nonReentrant {
         require(block.timestamp < pools[_name].deadline, "Deadline exceeded");
         require(pools[_name].fundingComplete, "Pool is already funded"); 
         require(_amount > 0, "Amount must be greater than 0");
+
+        // Transfer tokens from user to contract
+        require(tokenPool.transferFrom(msg.sender, address(this), _amount), "Token transfer failed");
 
         pools[_name].contributions[msg.sender] += _amount;
         pools[_name].totalRaised += _amount;
@@ -84,6 +89,7 @@ contract PoolTurquesa is ReentrancyGuard {
             pools[_name].fundingComplete = true;
         }
     }
+
 
     function vote(string memory _name, uint _propIndex) public {
         require(pools[_name].contributions[msg.sender] > 0, "Only contributors can vote");
@@ -101,5 +107,31 @@ contract PoolTurquesa is ReentrancyGuard {
         payable(msg.sender).transfer(amount);
         emit RefundClaimed(_name, msg.sender, amount);
     }
+    function getVoterInfo(string memory _poolName, address _voter) public view returns (uint[] memory votedIndexes, uint[] memory voteCounts) {
+        Pool storage pool = pools[_poolName];
+        require(pool.creator != address(0), "Pool not found");
 
+        uint[] memory indexes;
+        uint[] memory counts;
+        uint totalVotes = 0;
+
+        for (uint i = 0; i < properties.length; i++) {
+            if (pool.votes[_voter] == i) {
+                indexes = append(indexes, i);
+                counts = append(counts, pool.contributions[_voter]);
+                totalVotes += pool.contributions[_voter];
+            }
+        }
+
+        return (indexes, counts);
+    }
+
+    function append(uint[] memory array, uint value) internal pure returns (uint[] memory) {
+        uint[] memory newArray = new uint[](array.length + 1);
+        for (uint i = 0; i < array.length; i++) {
+            newArray[i] = array[i];
+        }
+        newArray[array.length] = value;
+        return newArray;
+    }
 }
